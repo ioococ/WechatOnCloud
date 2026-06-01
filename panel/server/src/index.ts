@@ -42,6 +42,7 @@ import {
   uploadToInstance,
   listInstanceFiles,
   downloadFromInstance,
+  deleteInstanceFile,
 } from './docker.js';
 import { createSession, getSession, destroySession, destroyUserSessions } from './sessions.js';
 
@@ -248,6 +249,7 @@ app.delete('/api/admin/instances/:id', async (req, reply) => {
   if (!inst) return reply.code(404).send({ error: '实例不存在' });
   await removeInstanceContainer(inst, purge);
   removeInstanceRecord(id);
+  controlHolders.delete(id);
   return { ok: true };
 });
 
@@ -319,6 +321,21 @@ app.get('/api/instances/:id/files', async (req, reply) => {
   }
 });
 
+// 删除某个中转文件（有访问权限即可）
+app.delete('/api/instances/:id/files', async (req, reply) => {
+  const u = requireAuth(req, reply);
+  if (!u) return;
+  const id = (req.params as any).id;
+  if (!userCanAccess(u, id)) return reply.code(403).send({ error: '无权访问该实例' });
+  const name = String((req.query as any)?.name || '').trim();
+  try {
+    await deleteInstanceFile(findInstance(id)!, name);
+    return { ok: true };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '删除失败' });
+  }
+});
+
 // 下载某个中转文件
 app.get('/api/instances/:id/download', async (req, reply) => {
   const u = requireAuth(req, reply);
@@ -334,6 +351,48 @@ app.get('/api/instances/:id/download', async (req, reply) => {
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '下载失败' });
   }
+});
+
+// ---------- 多端协作：操作控制权（心跳软锁，避免多人同时操作打架） ----------
+// 同一实例被多个浏览器连的是同一会话，键鼠会互相打架。这里用"心跳持锁"：
+// 当前操作者每隔几秒 beat 续约；TTL 内他人只读（前端盖只读遮罩）。空闲超 TTL 自动释放。
+const CONTROL_TTL = 10_000; // ms：超过则视为已空闲，可被接管
+const controlHolders = new Map<string, { userId: string; username: string; at: number }>();
+
+// 续约/认领：无人持有、已超时、或本来就是我 → 我成为操作者；否则返回当前操作者。
+app.post('/api/instances/:id/control/beat', async (req, reply) => {
+  const u = requireAuth(req, reply);
+  if (!u) return;
+  const id = (req.params as any).id;
+  if (!userCanAccess(u, id)) return reply.code(403).send({ error: '无权访问该实例' });
+  const now = Date.now();
+  const h = controlHolders.get(id);
+  if (!h || now - h.at > CONTROL_TTL || h.userId === u.id) {
+    controlHolders.set(id, { userId: u.id, username: u.username, at: now });
+    return { mine: true, holder: u.username };
+  }
+  return { mine: false, holder: h.username };
+});
+
+// 只读查询当前操作者（前端轮询；不认领）。超 TTL 视为空闲。
+app.get('/api/instances/:id/control', async (req, reply) => {
+  const u = requireAuth(req, reply);
+  if (!u) return;
+  const id = (req.params as any).id;
+  if (!userCanAccess(u, id)) return reply.code(403).send({ error: '无权访问该实例' });
+  const h = controlHolders.get(id);
+  if (!h || Date.now() - h.at > CONTROL_TTL) return { free: true, mine: false, holder: null };
+  return { free: false, mine: h.userId === u.id, holder: h.username };
+});
+
+// 主动接管（"申请控制"）：强制把操作权抢过来。
+app.post('/api/instances/:id/control/take', async (req, reply) => {
+  const u = requireAuth(req, reply);
+  if (!u) return;
+  const id = (req.params as any).id;
+  if (!userCanAccess(u, id)) return reply.code(403).send({ error: '无权访问该实例' });
+  controlHolders.set(id, { userId: u.id, username: u.username, at: Date.now() });
+  return { mine: true, holder: u.username };
 });
 
 // 该实例的微信安装状态（有访问权限即可看）

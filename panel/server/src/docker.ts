@@ -269,6 +269,12 @@ export async function listInstanceFiles(inst: Instance): Promise<TransferFile[]>
     });
 }
 
+export async function deleteInstanceFile(inst: Instance, name: string): Promise<void> {
+  if (!safeName(name)) throw new Error('文件名不合法');
+  // argv 数组直传，不经 shell；safeName 已排除路径穿越
+  await execCapture(inst, ['rm', '-f', `${TRANSFER_DIR}/${name}`]);
+}
+
 export async function downloadFromInstance(inst: Instance, name: string): Promise<Buffer> {
   if (!safeName(name)) throw new Error('文件名不合法');
   const c = docker.getContainer(inst.containerName);

@@ -2,11 +2,20 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, type PanelUser, type InstanceWithStatus } from '../api';
 import { useUI, PasswordInput } from '../ui';
+import { useAuth } from '../auth';
 
 const BUSY_PHASES = ['downloading', 'extracting', 'installing'];
 
-export default function Admin() {
+const MenuIcon = (
+  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  </svg>
+);
+
+export default function Admin({ onOpenMenu, onChangePassword }: { onOpenMenu: () => void; onChangePassword: () => void }) {
   const nav = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const { toast, confirm } = useUI();
   const [users, setUsers] = useState<PanelUser[]>([]);
   const [instances, setInstances] = useState<InstanceWithStatus[]>([]);
@@ -24,6 +33,7 @@ export default function Admin() {
   const timer = useRef<number | undefined>(undefined);
 
   const load = async () => {
+    if (!isAdmin) return; // 子账号无管理数据权限，管理页只给改密
     try {
       const [{ users }, { instances }] = await Promise.all([api.listUsers(), api.listInstances()]);
       setUsers(users);
@@ -103,93 +113,114 @@ export default function Admin() {
   };
 
   return (
-    <div className="page">
-      <header className="topbar">
-        <button className="btn-text" onClick={() => nav('/')}>
-          ‹ 返回
+    <div className="ws-page">
+      <header className="ws-head">
+        <button className="ws-menu" onClick={onOpenMenu} aria-label="菜单">
+          {MenuIcon}
         </button>
-        <span className="topbar-title">管理</span>
-        <span style={{ width: 48 }} />
+        <span className="ws-title">{isAdmin ? '管理' : '设置'}</span>
       </header>
 
       <main className="content">
         {err && <div className="error">{err}</div>}
 
-        <div className="section-row">
-          <span className="section-title">微信实例</span>
-          <button className="btn-text" onClick={() => setCreatingInst(true)}>
-            + 新建实例
-          </button>
-        </div>
-        {instances.length === 0 ? (
-          <div className="list">
-            <div className="muted small" style={{ padding: '14px 16px' }}>暂无实例</div>
-          </div>
-        ) : (
-          <div className="inst-grid">
-            {instances.map((inst) => (
-              <InstanceAdminCard
-                key={inst.id}
-                inst={inst}
-                userCount={usersForInstance(inst.id).length}
-                starting={starting.has(inst.id)}
-                onTrigger={trigger}
-                onStart={() => start(inst)}
-                onRename={() => setRenameInst(inst)}
-                onAssign={() => setAssignInst(inst)}
-                onDelete={() => setDeleteInst(inst)}
-              />
-            ))}
-          </div>
+        {isAdmin && (
+          <>
+            <div className="section-row">
+              <span className="section-title">微信实例</span>
+              <button className="btn-text" onClick={() => setCreatingInst(true)}>
+                + 新建实例
+              </button>
+            </div>
+            {instances.length === 0 ? (
+              <div className="list">
+                <div className="muted small" style={{ padding: '14px 16px' }}>暂无实例</div>
+              </div>
+            ) : (
+              <div className="inst-grid">
+                {instances.map((inst) => (
+                  <InstanceAdminCard
+                    key={inst.id}
+                    inst={inst}
+                    userCount={usersForInstance(inst.id).length}
+                    starting={starting.has(inst.id)}
+                    onEnter={() => nav(`/i/${inst.id}`)}
+                    onTrigger={trigger}
+                    onStart={() => start(inst)}
+                    onRename={() => setRenameInst(inst)}
+                    onAssign={() => setAssignInst(inst)}
+                    onDelete={() => setDeleteInst(inst)}
+                  />
+                ))}
+              </div>
+            )}
+
+            <div className="section-row" style={{ marginTop: 22 }}>
+              <span className="section-title">子账号</span>
+              <button className="btn-text" onClick={() => setCreatingUser(true)}>
+                + 新建子账号
+              </button>
+            </div>
+            {subs.length === 0 ? (
+              <div className="list">
+                <div className="muted small" style={{ padding: '14px 16px' }}>暂无子账号</div>
+              </div>
+            ) : (
+              <div className="inst-grid">
+                {subs.map((u) => (
+                  <div key={u.id} className="inst-card">
+                    <div className="inst-head">
+                      <span className="inst-name">{u.username}</span>
+                      {u.disabled ? <span className="tag tag-off">已禁用</span> : <span className="tag tag-on">正常</span>}
+                    </div>
+                    <div className="inst-sub">{u.allowedInstances.length > 0 ? `可访问 ${u.allowedInstances.length} 个实例` : '未分配实例'}</div>
+                    {u.allowedInstances.length > 0 && (
+                      <div className="chip-row" style={{ marginTop: 8 }}>
+                        {u.allowedInstances.map((id) => (
+                          <span key={id} className="chip chip-static">
+                            {instName(id)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="inst-admin-links">
+                      <button className="btn-text" onClick={() => setAssignUser(u)}>
+                        可访问实例
+                      </button>
+                      <button className="btn-text" onClick={() => toggle(u)}>
+                        {u.disabled ? '启用' : '禁用'}
+                      </button>
+                      <button className="btn-text" onClick={() => setResetTarget(u)}>
+                        重置密码
+                      </button>
+                      <button className="btn-text danger" onClick={() => removeUser(u)}>
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
 
-        <div className="section-row" style={{ marginTop: 22 }}>
-          <span className="section-title">子账号</span>
-          <button className="btn-text" onClick={() => setCreatingUser(true)}>
-            + 新建子账号
-          </button>
+        {/* 账号：所有人（含子账号）都能在此改密 */}
+        <div className="section-row" style={{ marginTop: isAdmin ? 22 : 0 }}>
+          <span className="section-title">账号</span>
         </div>
-        <div className="list">
-          {users.map((u) => (
-            <div key={u.id} className="user-row">
-              <div className="user-main">
-                <span className="user-name">
-                  {u.username}
-                  {u.role === 'admin' && <span className="tag">管理员</span>}
-                  {u.disabled && <span className="tag tag-off">已禁用</span>}
-                </span>
-                {u.role === 'admin' ? (
-                  <span className="muted small">可访问全部实例</span>
-                ) : u.allowedInstances.length > 0 ? (
-                  <span className="chip-row">
-                    {u.allowedInstances.map((id) => (
-                      <span key={id} className="chip chip-static">
-                        {instName(id)}
-                      </span>
-                    ))}
-                  </span>
-                ) : (
-                  <span className="muted small">未分配实例</span>
-                )}
-              </div>
-              {u.role !== 'admin' && (
-                <div className="user-actions">
-                  <button className="btn-text" onClick={() => setAssignUser(u)}>
-                    可访问实例
-                  </button>
-                  <button className="btn-text" onClick={() => toggle(u)}>
-                    {u.disabled ? '启用' : '禁用'}
-                  </button>
-                  <button className="btn-text" onClick={() => setResetTarget(u)}>
-                    重置密码
-                  </button>
-                  <button className="btn-text danger" onClick={() => removeUser(u)}>
-                    删除
-                  </button>
-                </div>
-              )}
+        <div className="inst-grid">
+          <div className="inst-card">
+            <div className="inst-head">
+              <span className="inst-name">{user?.username}</span>
+              {isAdmin ? <span className="tag">管理员</span> : <span className="tag tag-on">子账号</span>}
             </div>
-          ))}
+            <div className="inst-sub">{isAdmin ? '可访问全部实例' : `可访问 ${user?.allowedInstances.length ?? 0} 个实例`}</div>
+            <div className="inst-actions">
+              <button className="btn btn-primary inst-act-wide" onClick={onChangePassword}>
+                修改密码
+              </button>
+            </div>
+          </div>
         </div>
       </main>
 
@@ -398,6 +429,7 @@ function InstanceAdminCard({
   inst,
   userCount,
   starting,
+  onEnter,
   onTrigger,
   onStart,
   onRename,
@@ -407,6 +439,7 @@ function InstanceAdminCard({
   inst: InstanceWithStatus;
   userCount: number;
   starting?: boolean;
+  onEnter: () => void;
   onTrigger: (inst: InstanceWithStatus, kind: 'install' | 'update') => void;
   onStart: () => void;
   onRename: () => void;
@@ -456,19 +489,20 @@ function InstanceAdminCard({
             <button className="btn btn-primary inst-act-wide" disabled={starting} onClick={onStart}>
               {starting ? '启动中…' : inst.runtime === 'missing' ? '创建并启动' : '启动实例'}
             </button>
-          ) : installed ? (
-            <button className="btn btn-primary inst-act-wide" onClick={() => onTrigger(inst, 'update')}>
-              更新微信
-            </button>
           ) : (
-            <button className="btn btn-primary inst-act-wide" onClick={() => onTrigger(inst, 'install')}>
-              下载安装微信
+            <button className="btn btn-primary inst-act-wide" disabled={!installed} onClick={onEnter} title={installed ? '' : '需先下载安装微信'}>
+              进入实例
             </button>
           )}
         </div>
       )}
 
       <div className="inst-admin-links">
+        {!busy && !offline && (
+          <button className="btn-text" onClick={() => onTrigger(inst, installed ? 'update' : 'install')}>
+            {installed ? '更新微信' : '下载安装'}
+          </button>
+        )}
         <button className="btn-text" onClick={onRename}>
           重命名
         </button>
